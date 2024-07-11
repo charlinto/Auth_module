@@ -1,13 +1,24 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { SignupDto } from './dto/signup.dto';
 import { InjectModel } from '@nestjs/mongoose';
 import { User } from './schames/user.schame';
 import { Model } from 'mongoose';
 import * as argon2 from "argon2";
+import { LoginDto } from './dto/login.dto';
+import { JwtService } from '@nestjs/jwt';
+import { RefreshToken } from './schames/refresh-token.schame';
+import { v4 as uuidv4 } from 'uuid';
+
 
 @Injectable()
 export class AuthService { constructor(
-  @InjectModel(User.name) private UserModel: Model<User>){}
+  @InjectModel(User.name)
+   private UserModel: Model<User>,
+  @InjectModel(RefreshToken.name)
+  private RefreshTokenModel: Model<RefreshToken>,
+
+
+  private jwtService:JwtService){}
 
   
  async signup(signupDto:SignupDto) {
@@ -33,6 +44,66 @@ if(emailInuse) {
 
 
  }
+
+ async login(Credential:LoginDto){
+  const {email, password } = Credential;
+   //find if user exist by email
+ const user = await this.UserModel.findOne({email})
+ if (!user) {
+  throw new UnauthorizedException('Wrong Credentails')
+ }
+// compare enetered password with existing password
+const passwordMatch = await argon2.verify(user.password, password)
+if(!passwordMatch)  {
+  throw new UnauthorizedException('Wrong Credentails')
+ }
+
+// Generating JWT tokens#
+const tokens = await this.generateUserTokens(user._id)
+return  {
+  ...tokens,
+  userId : user._id
+}
+ }
+
+
+
+ async refreshTokens(refreshToken: string) {
+  const token = await this.RefreshTokenModel.findOne({
+    token: refreshToken,
+    expiryDate: { $gte: new Date() },
+  });
+
+  if (!token) {
+    throw new UnauthorizedException('Refresh Token is invalid');
+  }
+  return this.generateUserTokens(token.userId);
+}
+
+ async generateUserTokens(userId) {
+  const accessToken = this.jwtService.sign({userId}, {expiresIn:'50' });
+  const refreshToken = uuidv4();
+  await this.storeRefreshToken(refreshToken, userId)
+   return {
+    accessToken,
+    refreshToken
+   }
+ }
+  
+
+ async storeRefreshToken(token: string, userId: string) {
+  // Calculate expiry date 3 days from now
+  const expiryDate = new Date();
+  expiryDate.setDate(expiryDate.getDate() + 3);
+
+  await this.RefreshTokenModel.updateOne(
+    { userId },
+    { $set: { expiryDate, token } },
+    {
+      upsert: true,
+    },
+  );
+}
 
 }
 
